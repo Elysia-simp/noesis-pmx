@@ -555,7 +555,7 @@ def pmxWriteModel(mdl, bs):
                         if vertIdxSize == 1:
                               bs.writeByte(morphIdx[i])
                         elif vertIdxSize == 2:
-                              bs.writeShort(morphIdx[i])
+                              bs.writeUShort(morphIdx[i])
                         elif vertIdxSize == 4:
                               bs.writeInt(morphIdx[i])
                         bs.writeFloat(morphVerts[i][0])
