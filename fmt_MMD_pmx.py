@@ -4,9 +4,13 @@ from inc_noesis import *
 import noesis
 import rapi
 import math
+import json
+import os
 
 anim2morph = False
 frameSplit = 100
+exportmorph2json = True
+jsonFrameSplit = 0 # leave at zero for just the last frame of the anim
 
 def registerNoesisTypes():
       handle = noesis.register("MMD Model", ".pmx")
@@ -14,6 +18,83 @@ def registerNoesisTypes():
       handle = noesis.register("MMD Animation", ".vmd")
       noesis.setHandlerWriteAnim(handle, vmdWriteAnim)
       return 1
+
+def exportAnimsToJson(anims):
+    result = {}
+    
+    EPSILON = 1e-4
+    
+    def isZeroPos(x, y, z):
+        return abs(x) < EPSILON and abs(y) < EPSILON and abs(z) < EPSILON
+    
+    def isIdentityQuat(q):
+        return abs(abs(q[3]) - 1.0) < EPSILON and abs(q[0]) < EPSILON and abs(q[1]) < EPSILON and abs(q[2]) < EPSILON
+    
+    def captureFrame(anim, frameIndex):
+        bones = {}
+        count = frameIndex * len(anim.bones)
+        
+        for a in range(0, len(anim.bones)):
+            if anim.bones[a].parentIndex != -1:
+                pMatrix = anim.bones[anim.bones[a].parentIndex]._matrix
+                matrix = anim.bones[a]._matrix
+                pos = NoeVec3((anim.frameMats[count][3][0], anim.frameMats[count][3][1], anim.frameMats[count][3][2]))
+                bm = pMatrix.toQuat().toMat43().inverse()
+                bms = math.sqrt((pMatrix[0][0] * pMatrix[0][0]) + (pMatrix[1][0] * pMatrix[1][0]) + (pMatrix[2][0] * pMatrix[2][0]))
+                bm[3][0] = pos[0]
+                bm[3][1] = pos[1]
+                bm[3][2] = pos[2]
+                bm = bm.inverse()
+                posX = (bm[3][0] * -1 * bms) - (matrix[3][0] - pMatrix[3][0])
+                posY = (bm[3][1] * -1 * bms) - (matrix[3][1] - pMatrix[3][1])
+                posZ = (bm[3][2] * -1 * bms) - (matrix[3][2] - pMatrix[3][2])
+                pbm = pMatrix.toQuat()
+                quat = anim.frameMats[count].toQuat() * pbm
+            else:
+                matrix = anim.bones[a]._matrix
+                posX = anim.frameMats[count][3][0] - matrix[3][0]
+                posY = anim.frameMats[count][3][1] - matrix[3][1]
+                posZ = anim.frameMats[count][3][2] - matrix[3][2]
+                quat = anim.frameMats[count].toQuat()
+            
+            bm = anim.bones[a]._matrix.toQuat()
+            bm[0] *= -1
+            bm[1] *= -1
+            bm[3] *= -1
+            quat[0] *= -1
+            quat[1] *= -1
+            quat[3] *= -1
+            quat = (quat.toMat43() * bm.toMat43().inverse()).toQuat()
+            count += 1
+            
+            posZ *= -1
+            
+            if not isZeroPos(posX, posY, posZ) or not isIdentityQuat(quat):
+                bones[anim.bones[a].name] = {
+                    "position": [posX, posY, posZ],
+                    "rotation": [quat[0], quat[1], quat[2], quat[3]]
+                }
+        return bones
+    
+    for anim in anims:
+      frameCount = anim.numFrames
+
+      
+      if jsonFrameSplit > 0:
+          for i in range(0, frameCount):
+              if i % jsonFrameSplit == 0 or i == frameCount - 1:
+                  bones = captureFrame(anim, i)
+                  key = anim.name + "_f" + str(i)
+                  if bones:
+                      result[key] = bones
+      else:
+          bones = captureFrame(anim, frameCount - 1)
+          if bones:
+              result[anim.name] = bones
+
+    outputpath = os.path.normpath(os.path.join(rapi.getOutputName(), "..", rapi.getExtensionlessName(rapi.getLocalFileName(rapi.getOutputName())) + ".json"))
+    with open(outputpath, "w", encoding="utf-8") as f:
+        json.dump(result, f, indent=2, ensure_ascii=False)
 
 def pmxWriteModel(mdl, bs):
       bs.writeBytes("PMX ".encode())#magic
@@ -36,9 +117,12 @@ def pmxWriteModel(mdl, bs):
       morphCount = 0
       for mesh in mdl.meshes:
             morphCount += len(mesh.morphList)
+
+      anims = rapi.getDeferredAnims()
+      if rapi.noesisIsExporting() and exportmorph2json:
+            exportAnimsToJson(anims)
       if anim2morph:
             animMorphs = []
-            anims = rapi.getDeferredAnims()
             for anim in anims:
                   frameCount = anim.numFrames
                   if frameCount >= frameSplit * 2:
@@ -563,7 +647,7 @@ def getIndexSize(count, sign):
       return size
 
 def vmdWriteAnim(anims, bs):
-      if anim2morph:
+      if anim2morph or exportmorph2json:
             rapi.setDeferredAnims(anims)
             return 0
       else:
